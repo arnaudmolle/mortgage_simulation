@@ -3,12 +3,14 @@ library(ggplot2)
 library(dplyr)
 library(tidyr)
 library(scales)
-library(bslib)
-library(bsicons)
-library(thematic)
+library(bslib)      # For modern UI components
+library(bsicons)    # For icons
+library(thematic)   # To auto-style plots
 
+# Automatically theme plots to match the UI
 thematic_shiny()
 
+# Load models (Assumed to be in your working directory)
 source("model/defaults.R")
 source("model/validation.R")
 source("model/generators.R")
@@ -18,76 +20,153 @@ source("model/runner.R")
 source("model/aggregation.R")
 source("model/optimize_dp.R")
 
+ui <- page_sidebar(
+  title = div(bs_icon("graph-up-arrow"), " Mortgage vs Rent Monte Carlo"),
+  
+  theme = bs_theme(
+    version = 5,
+    bootswatch = "zephyr", # Clean, professional financial theme
+    primary = "#2C3E50",
+    "card-cap-bg" = "#F8F9FA"
+  ),
 
-ui <- fluidPage(
-  titlePanel("Mortgage vs Rent Monte Carlo Model"),
+  sidebar = sidebar(
+    width = 400, # Slightly wider to accommodate side-by-side inputs
+    bg = "#f8f9fa",
+    
+    # Run button at top for easy access
+    actionButton("run", "Run Simulation", icon = icon("play"), class = "btn-primary btn-lg w-100 mb-3"),
+    
+    accordion(
+      open = c("Personal", "Property"), # Open primary sections by default
+      
+      accordion_panel(
+        "Personal Situation",
+        icon = bs_icon("person-vcard"),
+        value = "Personal",
+        numericInput("initial_capital", "Available capital (€)", 250000, step = 10000),
+        numericInput("annual_salary", "Annual salary (€)", 50000, step = 5000),
+        sliderInput("savings_rate", "Savings rate (%)", 0, 100, 30, step = 5)
+      ),
+      
+      accordion_panel(
+        "Property Details",
+        icon = bs_icon("house"),
+        value = "Property",
+        numericInput("house_price", "House price (€)", 400000, step = 10000),
+        sliderInput("down_payment", "Down payment (%)", 10, 95, 20),
+        sliderInput("mortgage_rate", "Mortgage rate (%)", 1, 6, 3.5, step = 0.1)
+      ),
+      
+      accordion_panel(
+        "Market Parameters",
+        icon = bs_icon("sliders"),
+        value = "Advanced",
+        numericInput("n_sim", "Monte Carlo simulations", 5000, step = 1000),
+        
+        # Grouping advanced inputs neatly
+        h6("Investment Returns", class = "mt-3 text-primary"),
+        layout_columns(
+          col_widths = c(6, 6),
+          sliderInput("inv_mean", "Mean (%)", -5, 15, 4, step = 0.5),
+          sliderInput("inv_sd", "SD (%)", 5, 30, 15, step = 1)
+        ),
+        
+        h6("House Appreciation", class = "mt-2 text-primary"),
+        layout_columns(
+          col_widths = c(6, 6),
+          sliderInput("house_mean", "Mean (%)", -2, 10, 3, step = 0.5),
+          sliderInput("house_sd", "SD (%)", 1, 20, 8, step = 1)
+        ),
+        
+        h6("Inflation", class = "mt-2 text-primary"),
+        layout_columns(
+          col_widths = c(6, 6),
+          sliderInput("inflation_mean", "Mean (%)", 0, 8, 2.4, step = 0.2),
+          sliderInput("inflation_sd", "SD (%)", 0.5, 5, 1.5, step = 0.2)
+        ),
+        
+        h6("Salary Growth", class = "mt-2 text-primary"),
+        layout_columns(
+          col_widths = c(6, 6),
+          sliderInput("salary_mean", "Mean (%)", -2, 10, 3.5, step = 0.5),
+          sliderInput("salary_sd", "SD (%)", 0, 10, 2.5, step = 0.5)
+        ),
+        
+        h6("Correlations", class = "mt-2 text-primary"),
+        sliderInput("cor_inv_house", "Investments vs Housing", -0.5, 0.5, -0.1, step = 0.05)
+      )
+    )
+  ),
 
-  sidebarLayout(
-    sidebarPanel(
-      h4("Personal Situation"),
-      
-      numericInput("initial_capital", "Available capital (€)", 250000, step = 10000),
-      numericInput("annual_salary", "Annual salary (€)", 50000, step = 5000),
-      sliderInput("savings_rate", "Savings rate (%)", 0, 100, 30, step = 5),
-      
-      h4("Property"),
-      numericInput("house_price", "House price (€)", 400000, step = 10000),
-      sliderInput("down_payment", "Down payment (%)", 10, 95, 20),
-      sliderInput("mortgage_rate", "Mortgage rate (%)", 1, 6, 3.5, step = 0.1),
-      
-      h4("Simulation Settings"),
-      numericInput("n_sim", "Monte Carlo simulations", 5000, step = 1000),
-      
-      # Advanced options - now always visible but collapsible
-      h4("Monte Carlo Parameters"),
-      
-      h5("Investment Returns"),
-      fluidRow(
-        column(6, sliderInput("inv_mean", "Mean (%)", -5, 15, 4, step = 0.5)),
-        column(6, sliderInput("inv_sd", "Std Dev (%)", 5, 30, 15, step = 1))
+  # Main Content Area
+  navset_card_underline(
+    title = "Analysis Results",
+    
+    # --- Tab 1: Summary ---
+    nav_panel(
+      "Eligibility & Summary",
+      icon = bs_icon("clipboard-check"),
+      layout_columns(
+        col_widths = 12,
+        uiOutput("eligibility_cards") # Using Value Boxes now
       ),
-      
-      h5("House Appreciation"),
-      fluidRow(
-        column(6, sliderInput("house_mean", "Mean (%)", -2, 10, 3, step = 0.5)),
-        column(6, sliderInput("house_sd", "Std Dev (%)", 1, 20, 8, step = 1))
-      ),
-      
-      h5("Inflation"),
-      fluidRow(
-        column(6, sliderInput("inflation_mean", "Mean (%)", 0, 8, 2.4, step = 0.2)),
-        column(6, sliderInput("inflation_sd", "Std Dev (%)", 0.5, 5, 1.5, step = 0.2))
-      ),
-      
-      h5("Salary Growth"),
-      fluidRow(
-        column(6, sliderInput("salary_mean", "Mean (%)", -2, 10, 3.5, step = 0.5)),
-        column(6, sliderInput("salary_sd", "Std Dev (%)", 0, 10, 2.5, step = 0.5))
-      ),
-      
-      h5("Correlations"),
-      sliderInput("cor_inv_house", "Investments vs Housing", -0.5, 0.5, -0.1, step = 0.05),
-
-      actionButton("run", "Run simulation", class = "btn-primary btn-lg", width = "100%")
+      card(
+        card_header("Wealth Projection (Year 30)"),
+        tableOutput("summary_table")
+      )
     ),
-
-    mainPanel(
-      tabsetPanel(
-        tabPanel("Eligibility & Summary",
-                 htmlOutput("eligibility_text"),
-                 br(),
-                 tableOutput("summary_table")),
-        tabPanel("Wealth Trajectories", plotOutput("wealth_plot")),
-        tabPanel("Risk Analysis", 
-                 fluidRow(
-                   column(6, tableOutput("risk_table")),
-                   column(6, plotOutput("risk_dist_plot"))
-                 ),
-                 plotOutput("risk_box_plot")),
-        tabPanel("Optimal Down Payment",
-                 htmlOutput("optimal_dp_text"),
-                 plotOutput("optimal_dp_plot"),
-                 tableOutput("optimal_comparison_table"))
+    
+    # --- Tab 2: Trajectories ---
+    nav_panel(
+      "Wealth Trajectories",
+      icon = bs_icon("graph-up"),
+      card(
+        full_screen = TRUE,
+        card_header("Monte Carlo Paths"),
+        plotOutput("wealth_plot", height = "600px")
+      )
+    ),
+    
+    # --- Tab 3: Risk ---
+    nav_panel(
+      "Risk Analysis",
+      icon = bs_icon("shield-exclamation"),
+      layout_columns(
+        col_widths = c(5, 7),
+        card(
+          card_header("Risk Metrics"),
+          tableOutput("risk_table")
+        ),
+        card(
+          card_header("Terminal Wealth Distribution"),
+          plotOutput("risk_dist_plot")
+        )
+      ),
+      card(
+        card_header("Wealth Spread Comparison"),
+        plotOutput("risk_box_plot", height = "300px")
+      )
+    ),
+    
+    # --- Tab 4: Optimization ---
+    nav_panel(
+      "Optimal Down Payment",
+      icon = bs_icon("bullseye"),
+      layout_columns(
+        col_widths = c(4, 8),
+        card(
+          card_header("Optimization Result"),
+          htmlOutput("optimal_dp_text")
+        ),
+        card(
+          full_screen = TRUE,
+          card_header("Efficient Frontier"),
+          plotOutput("optimal_dp_plot"),
+          hr(),
+          h5("Detailed Comparison", class = "card-title fs-6"),
+          tableOutput("optimal_comparison_table")
+        )
       )
     )
   )
@@ -150,35 +229,36 @@ server <- function(input, output, session) {
     })
   })
 
-  # Eligibility output
-  output$eligibility_text <- renderUI({
+  # --- NEW: Improved Eligibility Display with Value Boxes ---
+  output$eligibility_cards <- renderUI({
     elig <- eligibility()
     p_params <- params()
     
-    html <- paste0(
-      "<h4>Scenario Eligibility Check</h4>",
-      "<p><strong>Available Capital:</strong> €", format(round(p_params$initial_capital), big.mark = ","), "</p>",
-      "<p><strong>Annual Salary:</strong> €", format(round(p_params$annual_salary), big.mark = ","), "</p>",
-      "<p><strong>Notary Fees (3%):</strong> €", format(round(elig$notary_fees), big.mark = ","), "</p>",
-      "<hr>",
-      "<p><strong>Cash Purchase:</strong> ",
-      if(elig$can_buy_cash) {
-        paste0("✓ ELIGIBLE (need €", format(round(elig$total_for_cash), big.mark = ","), ")")
-      } else {
-        paste0("✗ NOT ELIGIBLE (need €", format(round(elig$total_for_cash), big.mark = ","), ")")
-      },
-      "</p>",
-      "<p><strong>Mortgage Purchase:</strong> ",
-      if(elig$can_buy_mortgage) {
-        paste0("✓ ELIGIBLE (need €", format(round(elig$total_for_mortgage_min), big.mark = ","), " minimum)")
-      } else {
-        paste0("✗ NOT ELIGIBLE (need €", format(round(elig$total_for_mortgage_min), big.mark = ","), ")")
-      },
-      "</p>",
-      "<p><strong>Rent:</strong> ✓ ALWAYS ELIGIBLE</p>"
-    )
+    # Helper to format money
+    fmt <- function(x) paste0("€", format(round(x), big.mark = ","))
     
-    HTML(html)
+    layout_columns(
+      value_box(
+        title = "Available Capital",
+        value = fmt(p_params$initial_capital),
+        showcase = bs_icon("wallet2"),
+        theme = "primary"
+      ),
+      value_box(
+        title = "Mortgage Purchase",
+        value = if(elig$can_buy_mortgage) "Eligible" else "Not Eligible",
+        p(if(elig$can_buy_mortgage) paste("Min Req:", fmt(elig$total_for_mortgage_min)) else paste("Need", fmt(elig$total_for_mortgage_min))),
+        showcase = if(elig$can_buy_mortgage) bs_icon("check-circle") else bs_icon("x-circle"),
+        theme = if(elig$can_buy_mortgage) "teal" else "danger"
+      ),
+      value_box(
+        title = "Cash Purchase",
+        value = if(elig$can_buy_cash) "Eligible" else "Not Eligible",
+        p(paste("Total Req:", fmt(elig$total_for_cash))),
+        showcase = if(elig$can_buy_cash) bs_icon("cash-coin") else bs_icon("bank"),
+        theme = if(elig$can_buy_cash) "teal" else "secondary"
+      )
+    )
   })
 
   # Summary table
@@ -228,7 +308,7 @@ server <- function(input, output, session) {
       P10 = sapply(results_list, function(x) format(round(x$p10), big.mark = ",")),
       P90 = sapply(results_list, function(x) format(round(x$p90), big.mark = ","))
     )
-  }, striped = TRUE, hover = TRUE)
+  }, striped = TRUE, hover = TRUE, width = "100%", align = "c")
 
   output$wealth_plot <- renderPlot({
     req(results())
@@ -238,7 +318,7 @@ server <- function(input, output, session) {
   output$risk_table <- renderTable({
     req(results())
     risk_table(results())
-  }, striped = TRUE, hover = TRUE)
+  }, striped = TRUE, hover = TRUE, width = "100%", align = "c")
 
   output$risk_dist_plot <- renderPlot({
     req(results())
@@ -274,7 +354,7 @@ server <- function(input, output, session) {
     res <- optimal_results()
     
     if (is.null(res)) {
-      return(HTML("<p style='color: red;'><strong>Mortgage not eligible. Optimal down payment analysis not available.</strong></p>"))
+      return(div(class = "alert alert-danger", "Mortgage not eligible. Optimal down payment analysis not available."))
     }
     
     opt_idx <- which.max(res$median_wealth)
@@ -288,24 +368,18 @@ server <- function(input, output, session) {
     improvement <- opt_wealth - default_wealth
     improvement_pct <- (improvement / default_wealth) * 100
     
-    html <- paste0(
-      "<h4>Optimal Down Payment Analysis</h4>",
-      "<p><strong>Optimal Down Payment:</strong> ", sprintf("%.0f%%", opt_dp * 100), "</p>",
-      "<p><strong>Down Payment Amount:</strong> €", format(round(opt_dp * p$house_price), big.mark = ","), "</p>",
-      "<p><strong>Loan Amount:</strong> €", format(round((1 - opt_dp) * p$house_price), big.mark = ","), "</p>",
-      "<p><strong>Remaining Capital:</strong> €", format(round(p$initial_capital - opt_dp * p$house_price - p$notary_fees_pct * p$house_price), big.mark = ","), "</p>",
-      "<hr>",
-      "<p><strong>Expected Final Wealth (Year 30):</strong></p>",
-      "<ul>",
-      "<li>Median: €", format(round(opt_wealth), big.mark = ","), "</li>",
-      "<li>10th percentile: €", format(round(res$p10[opt_idx]), big.mark = ","), "</li>",
-      "<li>90th percentile: €", format(round(res$p90[opt_idx]), big.mark = ","), "</li>",
-      "</ul>",
-      "<p><strong>Improvement vs 20% down:</strong> €", format(round(improvement), big.mark = ","), 
-      " (+", sprintf("%.1f%%", improvement_pct), ")</p>"
+    div(
+      h4(class="text-success", paste0("Optimal Down Payment: ", sprintf("%.0f%%", opt_dp * 100))),
+      p(class="lead", paste0("Median Wealth: €", format(round(opt_wealth), big.mark = ","))),
+      hr(),
+      tags$ul(class="list-unstyled",
+        tags$li(strong("Down Payment Amount: "), "€", format(round(opt_dp * p$house_price), big.mark = ",")),
+        tags$li(strong("Loan Amount: "), "€", format(round((1 - opt_dp) * p$house_price), big.mark = ",")),
+        tags$li(strong("Remaining Capital: "), "€", format(round(p$initial_capital - opt_dp * p$house_price - p$notary_fees_pct * p$house_price), big.mark = ",")),
+        tags$li(class="mt-2 text-primary", strong("Gain vs 20% Down: "), "€", format(round(improvement), big.mark = ","), 
+                paste0(" (+", sprintf("%.1f%%", improvement_pct), ")"))
+      )
     )
-    
-    HTML(html)
   })
 
   output$optimal_dp_plot <- renderPlot({
@@ -318,12 +392,12 @@ server <- function(input, output, session) {
     opt_idx <- which.max(res$median_wealth)
     
     ggplot(res, aes(x = dp * 100, y = median_wealth)) +
-      geom_line(color = "#A23B72", linewidth = 1.5) +
-      geom_ribbon(aes(ymin = p10, ymax = p90), alpha = 0.2, fill = "#A23B72") +
+      geom_line(color = "#2C3E50", linewidth = 1.5) +
+      geom_ribbon(aes(ymin = p10, ymax = p90), alpha = 0.2, fill = "#2C3E50") +
       geom_point(data = res[opt_idx, ], 
                  aes(x = dp * 100, y = median_wealth),
-                 color = "#06A77D", size = 5, shape = 21, fill = "#06A77D", stroke = 2) +
-      geom_vline(xintercept = res$dp[opt_idx] * 100, linetype = "dashed", color = "#06A77D", linewidth = 1) +
+                 color = "#18BC9C", size = 5, shape = 21, fill = "#18BC9C", stroke = 2) +
+      geom_vline(xintercept = res$dp[opt_idx] * 100, linetype = "dashed", color = "#18BC9C", linewidth = 1) +
       scale_y_continuous(labels = scales::comma_format(suffix = " €")) +
       scale_x_continuous(breaks = seq(10, 100, 10)) +
       labs(
@@ -332,11 +406,7 @@ server <- function(input, output, session) {
         x = "Down Payment (%)",
         y = "Final Wealth - Median (EUR)"
       ) +
-      theme_minimal(base_size = 13) +
-      theme(
-        plot.title = element_text(face = "bold", size = 15),
-        plot.subtitle = element_text(size = 11)
-      )
+      theme_minimal(base_size = 14)
   })
 
   output$optimal_comparison_table <- renderTable({
@@ -362,7 +432,7 @@ server <- function(input, output, session) {
     colnames(comparison) <- c("Down Payment", "Median €", "10th % €", "90th % €", "Risk (CV)")
     
     comparison
-  }, striped = TRUE, hover = TRUE)
+  }, striped = TRUE, hover = TRUE, width = "100%", align = "c")
 }
 
 shinyApp(ui, server)
