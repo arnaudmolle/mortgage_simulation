@@ -1,5 +1,5 @@
 # ==============================================================================
-# BELGIUM HOUSE PURCHASE FINANCIAL MODEL - REVISED
+# BELGIUM HOUSE PURCHASE FINANCIAL MODEL - MONTE CARLO WITH OPTIMAL DOWN PAYMENT
 # Compares cash purchase vs. mortgage scenarios with Belgian market defaults
 # ==============================================================================
 
@@ -54,6 +54,7 @@ monthly_rent <- (house_price * rental_yield / 12) * rent_markup
 annual_rent <- monthly_rent * 12
 # Time horizon
 years <- mortgage_years
+
 # ==============================================================================
 # MONTE CARLO SIMULATION PARAMETERS
 # ==============================================================================
@@ -73,7 +74,7 @@ params <- list(
 cor_matrix <- matrix(c(
   1.00,  0.30, -0.40,  0.50,  # Investment return
   0.30,  1.00, -0.20,  0.60,  # Inflation
- -0.40, -0.20,  1.00, -0.30,  # House appreciation (inverse with stocks)
+ -0.20, -0.20,  1.00, -0.30,  # House appreciation (inverse with stocks)
   0.50,  0.60, -0.30,  1.00   # Salary growth
 ), nrow = 4, byrow = TRUE)
 
@@ -84,6 +85,7 @@ renovation_shock <- list(
   cost_pct = 0.15,     # 15% of house value
   year_range = c(10, 25)  # Can occur between years 10-25
 )
+
 # ==============================================================================
 # CORRELATED RANDOM NUMBER GENERATION
 # ==============================================================================
@@ -119,6 +121,7 @@ generate_scenario_returns <- function(sim_idx) {
     salary_growth = params$salary_growth$mean + params$salary_growth$sd * random_paths[4, , sim_idx]
   )
 }
+
 # ==============================================================================
 # RENOVATION SHOCK SIMULATION
 # ==============================================================================
@@ -139,6 +142,7 @@ generate_renovation_shocks <- function(n_sims, house_val) {
 }
 
 renovation_shocks <- generate_renovation_shocks(n_simulations, house_price)
+
 # ==============================================================================
 # INPUT VALIDATION
 # ==============================================================================
@@ -219,7 +223,7 @@ can_only_rent <- !can_buy_mortgage
 # MONTE CARLO SCENARIO SIMULATIONS
 # ==============================================================================
 
-run_scenario <- function(scenario_type, sim_idx, returns) {
+run_scenario <- function(scenario_type, sim_idx, returns, custom_dp_pct = NULL) {
   # Extract returns for this simulation
   inv_ret <- returns$inv_return
   infl <- returns$inflation
@@ -254,11 +258,22 @@ run_scenario <- function(scenario_type, sim_idx, returns) {
     }
     
   } else if (scenario_type == "mortgage" && can_buy_mortgage) {
-    actual_dp <- if(can_buy_cash) house_price * down_payment_pct else initial_capital - notary_fees
+    # Use custom down payment if provided, otherwise use default logic
+    if (!is.null(custom_dp_pct)) {
+      actual_dp_pct <- custom_dp_pct
+    } else {
+      actual_dp_pct <- if(can_buy_cash) down_payment_pct else (initial_capital - notary_fees) / house_price
+    }
+    
+    actual_dp <- house_price * actual_dp_pct
     actual_loan <- house_price - actual_dp
     
-    monthly_p <- actual_loan * (monthly_rate * (1 + monthly_rate)^n_payments) / 
-                 ((1 + monthly_rate)^n_payments - 1)
+    monthly_p <- if(actual_loan > 0) {
+      actual_loan * (monthly_rate * (1 + monthly_rate)^n_payments) / 
+        ((1 + monthly_rate)^n_payments - 1)
+    } else {
+      0
+    }
     annual_p <- monthly_p * 12
     
     liquid[1] <- initial_capital - actual_dp - notary_fees
@@ -325,8 +340,8 @@ run_scenario <- function(scenario_type, sim_idx, returns) {
   return(list(wealth = wealth, liquid = liquid, house_val = house_val, debt = debt))
 }
 
-# Run all simulations
-cat("\nRunning Monte Carlo simulations...\n")
+# Run all simulations for base scenarios
+cat("\nRunning Monte Carlo simulations for base scenarios...\n")
 pb <- txtProgressBar(min = 0, max = n_simulations, style = 3)
 
 results_mc <- list(
@@ -363,6 +378,7 @@ for (sim in 1:n_simulations) {
   setTxtProgressBar(pb, sim)
 }
 close(pb)
+
 # ==============================================================================
 # MONTE CARLO RESULTS ANALYSIS
 # ==============================================================================
@@ -418,7 +434,7 @@ if (can_buy_cash) {
 
 if (can_buy_mortgage) {
   mort_stats <- calc_stats(results_mc$mortgage[years+1, , 1])
-  print_stats(mort_stats, "Mortgage Purchase")
+  print_stats(mort_stats, "Mortgage Purchase (20% down)")
 }
 
 # Time-weighted dominance
@@ -473,6 +489,7 @@ if (can_buy_cash) {
   cash_beats_rent <- sum(results_mc$cash[years+1, , 1] > results_mc$rent[years+1, , 1], na.rm=TRUE) / n_simulations
   cat("Cash beats Rent:      ", sprintf("%5.1f%%", cash_beats_rent * 100), "\n", sep="")
 }
+
 # ==============================================================================
 # MONTE CARLO VISUALIZATIONS
 # ==============================================================================
@@ -627,3 +644,317 @@ for (scen in names(scenarios_list)) {
 }
 
 cat("\n")
+# Complete Belgium House Purchase Model with Optimal Down Payment Analysis
+# This is a continuation - add this after the base scenario analysis
+
+# ==============================================================================
+# PART 2: OPTIMAL DOWN PAYMENT ANALYSIS
+# ==============================================================================
+
+cat("\n\n")
+cat("================================================================================\n")
+cat("               PART 2: OPTIMAL DOWN PAYMENT ANALYSIS\n")
+cat("================================================================================\n\n")
+
+if (!can_buy_mortgage) {
+  cat("Cannot perform down payment analysis - insufficient capital for mortgage\n")
+} else {
+  
+  # Determine feasible down payment range
+  max_affordable_dp <- (initial_capital - notary_fees) / house_price
+  dp_percentages <- seq(0.10, min(0.95, max_affordable_dp), by = 0.05)
+  
+  cat("Testing ", length(dp_percentages), " down payment scenarios from ", 
+      min(dp_percentages)*100, "% to ", max(dp_percentages)*100, "%...\n", sep="")
+  cat("This will take approximately ", round(length(dp_percentages) * 0.15, 1), " minutes\n\n", sep="")
+  
+  # Storage for results
+  optimal_results <- data.frame(
+    DownPayment_Pct = dp_percentages,
+    Median_Wealth = NA,
+    Mean_Wealth = NA,
+    SD_Wealth = NA,
+    P10_Wealth = NA,
+    P90_Wealth = NA,
+    Median_Liquid = NA,
+    CV = NA,
+    Prob_Beat_Rent = NA,
+    Prob_Beat_Cash = NA
+  )
+  
+  pb2 <- txtProgressBar(min = 0, max = length(dp_percentages), style = 3)
+  
+  for (i in seq_along(dp_percentages)) {
+    dp_test <- dp_percentages[i]
+    
+    # Run Monte Carlo for this down payment
+    wealth_results <- numeric(n_simulations)
+    liquid_results <- numeric(n_simulations)
+    
+    for (sim in 1:n_simulations) {
+      returns <- generate_scenario_returns(sim)
+      result <- run_scenario("mortgage", sim, returns, custom_dp_pct = dp_test)
+      wealth_results[sim] <- result$wealth[years + 1]
+      liquid_results[sim] <- result$liquid[years + 1]
+    }
+    
+    # Calculate statistics
+    optimal_results$Median_Wealth[i] <- median(wealth_results, na.rm = TRUE)
+    optimal_results$Mean_Wealth[i] <- mean(wealth_results, na.rm = TRUE)
+    optimal_results$SD_Wealth[i] <- sd(wealth_results, na.rm = TRUE)
+    optimal_results$P10_Wealth[i] <- quantile(wealth_results, 0.10, na.rm = TRUE)
+    optimal_results$P90_Wealth[i] <- quantile(wealth_results, 0.90, na.rm = TRUE)
+    optimal_results$Median_Liquid[i] <- median(liquid_results, na.rm = TRUE)
+    optimal_results$CV[i] <- sd(wealth_results, na.rm = TRUE) / mean(wealth_results, na.rm = TRUE)
+    
+    # Compare to rent
+    optimal_results$Prob_Beat_Rent[i] <- sum(wealth_results > results_mc$rent[years+1, , 1], na.rm=TRUE) / n_simulations
+    
+    # Compare to cash if available
+    if (can_buy_cash) {
+      optimal_results$Prob_Beat_Cash[i] <- sum(wealth_results > results_mc$cash[years+1, , 1], na.rm=TRUE) / n_simulations
+    }
+    
+    setTxtProgressBar(pb2, i)
+  }
+  close(pb2)
+  
+  # Find optimal down payment
+  optimal_idx <- which.max(optimal_results$Median_Wealth)
+  optimal_dp <- optimal_results$DownPayment_Pct[optimal_idx]
+  optimal_wealth <- optimal_results$Median_Wealth[optimal_idx]
+  
+  cat("\n\n")
+  cat("OPTIMAL DOWN PAYMENT RECOMMENDATION:\n")
+  cat("--------------------------------------------------------------------------------\n")
+  cat("Optimal Down Payment:     ", sprintf("%.1f%%", optimal_dp * 100), "\n", sep="")
+  cat("Down Payment Amount:      €", format(round(optimal_dp * house_price), big.mark=","), "\n", sep="")
+  cat("Loan Amount:              €", format(round((1-optimal_dp) * house_price), big.mark=","), "\n", sep="")
+  cat("Remaining Cash:           €", format(round(initial_capital - optimal_dp * house_price - notary_fees), big.mark=","), "\n\n", sep="")
+  
+  cat("Expected Outcomes (Year ", years, "):\n", sep="")
+  cat("  Median Wealth:          €", format(round(optimal_wealth), big.mark=","), "\n", sep="")
+  cat("  Mean Wealth:            €", format(round(optimal_results$Mean_Wealth[optimal_idx]), big.mark=","), "\n", sep="")
+  cat("  10th Percentile:        €", format(round(optimal_results$P10_Wealth[optimal_idx]), big.mark=","), "\n", sep="")
+  cat("  90th Percentile:        €", format(round(optimal_results$P90_Wealth[optimal_idx]), big.mark=","), "\n", sep="")
+  cat("  Median Liquid Capital:  €", format(round(optimal_results$Median_Liquid[optimal_idx]), big.mark=","), "\n", sep="")
+  cat("  Coefficient of Variation: ", sprintf("%.3f", optimal_results$CV[optimal_idx]), "\n\n", sep="")
+  
+  cat("Performance vs Alternatives:\n")
+  cat("  Prob. beats Rent:       ", sprintf("%.1f%%", optimal_results$Prob_Beat_Rent[optimal_idx] * 100), "\n", sep="")
+  if (can_buy_cash) {
+    cat("  Prob. beats Cash:       ", sprintf("%.1f%%", optimal_results$Prob_Beat_Cash[optimal_idx] * 100), "\n", sep="")
+  }
+  
+  # Compare to default 20%
+  if (0.20 %in% dp_percentages) {
+    default_idx <- which(dp_percentages == 0.20)
+    improvement <- optimal_wealth - optimal_results$Median_Wealth[default_idx]
+    improvement_pct <- (improvement / optimal_results$Median_Wealth[default_idx]) * 100
+    
+    cat("\nImprovement vs 20% Down:\n")
+    cat("  Additional Wealth:      €", format(round(improvement), big.mark=","), 
+        " (+", sprintf("%.1f%%", improvement_pct), ")\n", sep="")
+  }
+  
+  # Risk analysis
+  cat("\nRisk Profile:\n")
+  if (optimal_dp < 0.25) {
+    cat("⚠️  LOW DOWN PAYMENT STRATEGY (High Leverage)\n")
+    cat("   • Maximizes investment capital\n")
+    cat("   • Higher potential returns but more debt risk\n")
+    cat("   • Requires confidence in investment performance\n")
+    cat("   • Less liquidity tied up in home equity\n\n")
+  } else if (optimal_dp > 0.50) {
+    cat("🛡️  HIGH DOWN PAYMENT STRATEGY (Low Leverage)\n")
+    cat("   • Minimizes debt and interest costs\n")
+    cat("   • More conservative, lower risk\n")
+    cat("   • Less exposed to investment market volatility\n")
+    cat("   • May forgo investment growth opportunities\n\n")
+  } else {
+    cat("⚖️  BALANCED DOWN PAYMENT STRATEGY\n")
+    cat("   • Moderate leverage and reasonable debt\n")
+    cat("   • Balances investment opportunity with security\n")
+    cat("   • Middle-ground risk/return profile\n")
+    cat("   • Flexible approach to market conditions\n\n")
+  }
+  
+  # ==============================================================================
+  # OPTIMAL DOWN PAYMENT VISUALIZATIONS
+  # ==============================================================================
+  
+  # Plot 4: Down Payment vs Median Wealth with Uncertainty
+  p_optimal <- ggplot(optimal_results, aes(x = DownPayment_Pct * 100, y = Median_Wealth)) +
+    geom_line(color = "#A23B72", linewidth = 1.5) +
+    geom_ribbon(aes(ymin = P10_Wealth, ymax = P90_Wealth), alpha = 0.2, fill = "#A23B72") +
+    geom_point(data = optimal_results[optimal_idx, ], 
+               aes(x = DownPayment_Pct * 100, y = Median_Wealth),
+               color = "#06A77D", size = 5, shape = 21, fill = "#06A77D", stroke = 2) +
+    geom_vline(xintercept = optimal_dp * 100, linetype = "dashed", color = "#06A77D", linewidth = 1) +
+    annotate("text", x = optimal_dp * 100, y = max(optimal_results$P90_Wealth) * 0.98,
+             label = paste0("Optimal: ", sprintf("%.0f%%", optimal_dp * 100)),
+             color = "#06A77D", fontface = "bold", hjust = -0.1, size = 4.5) +
+    scale_y_continuous(labels = scales::comma_format(suffix = " €"),
+                       breaks = scales::pretty_breaks(n = 8)) +
+    scale_x_continuous(breaks = seq(10, 100, 10)) +
+    labs(
+      title = "Optimal Down Payment Analysis",
+      subtitle = paste0(format(n_simulations, big.mark=","), " simulations per scenario | Shaded area = 10th-90th percentile range"),
+      x = "Down Payment (%)",
+      y = "Final Wealth - Median (EUR)"
+    ) +
+    theme_minimal(base_size = 13) +
+    theme(
+      plot.title = element_text(face = "bold", size = 15),
+      plot.subtitle = element_text(size = 11),
+      panel.grid.minor = element_blank()
+    )
+  
+  print(p_optimal)
+  
+  # Plot 5: Risk-Return Trade-off (CV vs Median Wealth)
+  p_risk_return <- ggplot(optimal_results, aes(x = CV, y = Median_Wealth)) +
+    geom_path(color = "#457B9D", linewidth = 1.2, arrow = arrow(length = unit(0.3, "cm"))) +
+    geom_point(aes(color = DownPayment_Pct * 100), size = 3) +
+    geom_point(data = optimal_results[optimal_idx, ],
+               aes(x = CV, y = Median_Wealth),
+               color = "#06A77D", size = 6, shape = 18) +
+    scale_color_gradient2(
+      low = "#E63946", mid = "#F18F01", high = "#06A77D",
+      midpoint = 50,
+      name = "Down\nPayment (%)"
+    ) +
+    scale_y_continuous(labels = scales::comma_format(suffix = " €")) +
+    labs(
+      title = "Risk-Return Trade-off by Down Payment",
+      subtitle = "Lower CV = less risk | Arrow shows increasing down payment direction",
+      x = "Coefficient of Variation (Risk)",
+      y = "Median Final Wealth (EUR)"
+    ) +
+    theme_minimal(base_size = 13) +
+    theme(
+      plot.title = element_text(face = "bold", size = 15),
+      legend.position = "right"
+    )
+  
+  print(p_risk_return)
+  
+
+  
+  # Plot 7: Probability Heatmap
+  prob_data <- optimal_results %>%
+    select(DownPayment_Pct, Prob_Beat_Rent, Prob_Beat_Cash) %>%
+    pivot_longer(cols = c(Prob_Beat_Rent, Prob_Beat_Cash), 
+                 names_to = "Comparison", values_to = "Probability") %>%
+    mutate(Comparison = case_when(
+      Comparison == "Prob_Beat_Rent" ~ "vs Rent",
+      Comparison == "Prob_Beat_Cash" ~ "vs Cash",
+      TRUE ~ Comparison
+    )) %>%
+    filter(!is.na(Probability))
+  
+  if (nrow(prob_data) > 0) {
+    p_probability <- ggplot(prob_data, aes(x = DownPayment_Pct * 100, y = Comparison, fill = Probability)) +
+      geom_tile(color = "white", linewidth = 1) +
+      geom_vline(xintercept = optimal_dp * 100, linetype = "dashed", color = "white", linewidth = 1.2) +
+      scale_fill_gradient2(
+        low = "#E63946", mid = "#F18F01", high = "#06A77D",
+        midpoint = 0.5,
+        labels = scales::percent_format(),
+        name = "Win\nProbability"
+      ) +
+      scale_x_continuous(breaks = seq(10, 100, 10)) +
+      labs(
+        title = "Probability of Outperformance by Down Payment",
+        subtitle = paste0("Green = higher chance of best outcome | Optimal: ", sprintf("%.0f%%", optimal_dp * 100)),
+        x = "Down Payment (%)",
+        y = ""
+      ) +
+      theme_minimal(base_size = 13) +
+      theme(
+        plot.title = element_text(face = "bold", size = 15),
+        axis.text.y = element_text(size = 12, face = "bold"),
+        panel.grid = element_blank()
+      )
+    
+    print(p_probability)
+  }
+  
+  # Plot 8: Distribution Comparison (Optimal vs 20% Default)
+  if (0.20 %in% dp_percentages) {
+    # Generate wealth distributions for optimal and 20%
+    wealth_optimal <- numeric(n_simulations)
+    wealth_20pct <- numeric(n_simulations)
+    
+    for (sim in 1:n_simulations) {
+      returns <- generate_scenario_returns(sim)
+      
+      result_opt <- run_scenario("mortgage", sim, returns, custom_dp_pct = optimal_dp)
+      wealth_optimal[sim] <- result_opt$wealth[years + 1]
+      
+      result_20 <- run_scenario("mortgage", sim, returns, custom_dp_pct = 0.20)
+      wealth_20pct[sim] <- result_20$wealth[years + 1]
+    }
+    
+    comparison_df <- data.frame(
+      Wealth = c(wealth_optimal, wealth_20pct),
+      Strategy = c(
+        rep(paste0("Optimal (", sprintf("%.0f%%", optimal_dp * 100), ")"), n_simulations),
+        rep("Default (20%)", n_simulations)
+      )
+    )
+    
+    p_comparison <- ggplot(comparison_df, aes(x = Wealth, fill = Strategy)) +
+      geom_density(alpha = 0.6, linewidth = 1) +
+      geom_vline(data = comparison_df %>% group_by(Strategy) %>% summarise(median = median(Wealth)),
+                 aes(xintercept = median, color = Strategy), 
+                 linetype = "dashed", linewidth = 1.2) +
+      scale_x_continuous(labels = scales::comma_format(suffix = " €")) +
+      scale_fill_manual(values = c("#06A77D", "#A23B72")) +
+      scale_color_manual(values = c("#06A77D", "#A23B72")) +
+      labs(
+        title = "Wealth Distribution: Optimal vs Default Down Payment",
+        subtitle = "Dashed lines show median outcomes",
+        x = "Final Wealth (EUR)",
+        y = "Probability Density"
+      ) +
+      theme_minimal(base_size = 13) +
+      theme(
+        plot.title = element_text(face = "bold", size = 15),
+        legend.position = "bottom",
+        legend.title = element_blank()
+      )
+    
+    print(p_comparison)
+  }
+  
+  # Summary table
+  cat("\n\nDOWN PAYMENT COMPARISON TABLE:\n")
+  cat("--------------------------------------------------------------------------------\n")
+  
+  comparison_table <- optimal_results %>%
+    filter(DownPayment_Pct %in% c(0.10, 0.20, 0.30, optimal_dp) | 
+           abs(DownPayment_Pct - 0.50) < 0.01) %>%
+    arrange(DownPayment_Pct) %>%
+    mutate(
+      DP_Label = paste0(sprintf("%.0f%%", DownPayment_Pct * 100)),
+      across(c(Median_Wealth, P10_Wealth, P90_Wealth), ~format(round(.), big.mark=",")),
+      CV = sprintf("%.3f", CV),
+      Prob_Beat_Rent = sprintf("%.1f%%", Prob_Beat_Rent * 100)
+    ) %>%
+    select(DP_Label, Median_Wealth, P10_Wealth, P90_Wealth, CV, Prob_Beat_Rent)
+  
+  colnames(comparison_table) <- c("Down Payment", "Median €", "10th % €", "90th % €", "Risk (CV)", "Beat Rent")
+  
+  print(comparison_table, row.names = FALSE, right = FALSE)
+  
+  cat("\n")
+  cat("Key Takeaway: The optimal down payment of ", sprintf("%.0f%%", optimal_dp * 100), 
+      " maximizes median wealth\n", sep="")
+  cat("while balancing risk and maintaining adequate liquidity.\n")
+}
+
+cat("\n")
+cat("================================================================================\n")
+cat("Analysis complete!\n")
+cat("================================================================================\n")
