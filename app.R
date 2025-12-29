@@ -55,7 +55,8 @@ ui <- page_sidebar(
         value = "Property",
         numericInput("house_price", "House price (€)", 400000, step = 10000),
         sliderInput("down_payment", "Down payment (%)", 10, 95, 20),
-        sliderInput("mortgage_rate", "Mortgage rate (%)", 1, 6, 3.5, step = 0.1)
+        sliderInput("mortgage_rate", "Mortgage rate (%)", 1, 6, 3.5, step = 0.1),
+        sliderInput("mortgage_years", "Mortgage duration (years)", 5, 40, 30, step = 1)
       ),
       
       accordion_panel(
@@ -168,6 +169,21 @@ ui <- page_sidebar(
           tableOutput("optimal_comparison_table")
         )
       )
+    ),
+    
+    # --- Tab 5: Model Parameters ---
+    nav_panel(
+      "Model Parameters",
+      icon = bs_icon("sliders"),
+      card(
+        card_header("Correlation Matrix"),
+        p("4x4 correlation matrix for Monte Carlo variables:"),
+        tableOutput("correlation_matrix_table"),
+        p(class = "text-muted small mt-3",
+          "Investment Returns vs Inflation, House Appreciation, and Salary Growth;",
+          br(),
+          "House Appreciation vs Salary Growth")
+      )
     )
   )
 )
@@ -200,6 +216,7 @@ server <- function(input, output, session) {
     p$salary_mean <- input$salary_mean / 100
     p$salary_sd <- input$salary_sd / 100
     p$cor_inv_house <- input$cor_inv_house
+    p$mortgage_years <- input$mortgage_years
 
     p
   })
@@ -312,7 +329,11 @@ server <- function(input, output, session) {
 
   output$wealth_plot <- renderPlot({
     req(results())
-    plot_wealth(results())
+    elig <- eligibility()
+    if (!elig$can_buy_mortgage) {
+      return(NULL)
+    }
+    plot_wealth(results(), elig)
   })
 
   output$risk_table <- renderTable({
@@ -322,12 +343,12 @@ server <- function(input, output, session) {
 
   output$risk_dist_plot <- renderPlot({
     req(results())
-    plot_risk_distribution(results())
+    plot_risk_distribution(results(), eligibility())
   })
 
   output$risk_box_plot <- renderPlot({
     req(results())
-    plot_risk_boxplot(results())
+    plot_risk_boxplot(results(), eligibility())
   })
 
   # Optimal down payment analysis
@@ -432,6 +453,31 @@ server <- function(input, output, session) {
     colnames(comparison) <- c("Down Payment", "Median €", "10th % €", "90th % €", "Risk (CV)")
     
     comparison
+  }, striped = TRUE, hover = TRUE, width = "100%", align = "c")
+
+  output$correlation_matrix_table <- renderTable({
+    p <- params()
+    
+    # Build the correlation matrix
+    cor_matrix <- matrix(c(
+      1,  p$cor_inv_infl, p$cor_inv_house, p$cor_inv_salary,
+      p$cor_inv_infl, 1, -0.2, 0.6,
+      p$cor_inv_house, -0.2, 1, p$cor_house_salary,
+      p$cor_inv_salary, 0.6, p$cor_house_salary, 1
+    ), 4, byrow = TRUE)
+    
+    # Add row and column names
+    var_names <- c("Investment", "Inflation", "House Appr.", "Salary Gr.")
+    rownames(cor_matrix) <- var_names
+    colnames(cor_matrix) <- var_names
+    
+    # Convert to data frame with variable names as first column
+    df <- data.frame(Variable = rownames(cor_matrix), cor_matrix, check.names = FALSE)
+    
+    # Round to 3 decimal places
+    df[, -1] <- round(df[, -1], 3)
+    
+    df
   }, striped = TRUE, hover = TRUE, width = "100%", align = "c")
 }
 
